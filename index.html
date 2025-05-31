@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.IO Client</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.js"></script>
+</head>
+
+<body>
+
+    <h1>Socket.IO Client</h1>
+    <input type="text" id="trace" placeholder="traceroute">
+    <button onclick="start(document.getElementById('trace').value)">start</button>
+    <button onclick="stop()">stop</button>
+    <br />
+    <br />
+    <br />
+    <br />
+    <select name="ether" id="ether">
+        <option value="1.ether1">1.ether1</option>
+    </select>
+    <button onclick="monitor_traffic(document.getElementById('ether').value)">monitor_traffic</button>
+
+
+    <br />
+    <br />
+    <button onclick="interface()">interface print</button>
+    <br />
+    <br />
+    <button onclick="neighbor()">neighbor start</button>
+    <button onclick="neighbor_stop()">neighbor stop</button>
+
+    <br />
+    <div id="message"></div>
+    <script>
+        function traffic(speedInBytesPerSecond) {
+            if (speedInBytesPerSecond < 1024) {
+                return speedInBytesPerSecond + " B/s";
+            } else if (speedInBytesPerSecond < 1024 * 1024) {
+                return (speedInBytesPerSecond / 1024).toFixed(2) + " KB/s";
+            } else {
+                return (speedInBytesPerSecond / (1024 * 1024)).toFixed(2) + " MB/s";
+            }
+        }
+        const socket = io('http://localhost:3006');
+        function start(value) {
+            socket.emit('trace', value);
+        }
+        function stop() {
+            socket.emit('stop');
+        }
+
+        function interface() {
+            console.log('interface fe');
+            socket.emit('interface');
+        }
+        socket.on('interface', (packet) => {
+            console.log(packet);
+            document.getElementById('message').innerHTML = `
+        <pre>${JSON.stringify(packet, null, 2)}</pre>`;
+        });
+
+        function monitor_traffic(value) { 
+            socket.emit('monitor_traffic', value);
+        }
+
+        function neighbor() {
+            console.log('neighbor');
+            socket.emit('neighbor');
+        }
+
+        socket.on('monitor_traffic', (res) => {
+            console.log(traffic(res[0]['rx-bits-per-second']));
+            console.log(traffic(res[0]['tx-bits-per-second']));
+            document.getElementById('message').innerHTML = `
+        <pre>
+Download: ${traffic(res[0]['rx-bits-per-second'])}
+Upload: ${traffic(res[0]['tx-bits-per-second'])}    
+        </pre>`;
+        });
+
+        socket.on('trace', (packet) => {
+            console.log(packet);
+            document.getElementById('message').innerHTML = `
+        <pre>${JSON.stringify(packet, null, 2)}</pre>`;
+        });
+
+        socket.on('neighbor', (res) => {
+            console.log(res);
+            document.getElementById('message').innerHTML = `
+        <pre>${JSON.stringify(res, null, 2)}</pre>`;
+        });
+
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from the server');
+        });
+    </script>
+
+</body>
+
+</html>
