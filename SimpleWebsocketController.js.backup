@@ -1,0 +1,25 @@
+const express = require("express");
+const http = require("http");
+const socketIO = require("socket.io");
+
+class WebsocketController {
+  constructor(server, io, app) {
+    this.server = server;
+    this.io = io;
+    this.app = app;
+    this.initializeSocketEvents();
+  }
+
+  initializeSocketEvents() {
+    this.io.on("connection", (socket) => {
+      console.log(`Socket connected: ${socket.id}`);
+      socket.emit("log", "Connected");
+      
+      socket.on("disconnect", () => {
+        console.log(`Socket disconnected: ${socket.id}`);
+      });
+    });
+  }
+}
+
+module.exports = WebsocketController;

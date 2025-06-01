@@ -8,6 +8,7 @@ const socketIO = require("socket.io");
 const config = require("./config/config");
 const routes = require("./routes");
 const { errorHandler, notFound, requestLogger } = require("./middleware/errorHandler");
+const WebsocketController = require("./controllers/WebsocketController");
 
 const app = express();
 
@@ -40,16 +41,8 @@ const server = http.createServer(app);
 // Initialize Socket.IO
 const io = socketIO(server, config.socket);
 
-// Socket.IO connection handling
-io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
-  
-  socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id);
-  });
-  
-  // Add any socket event handlers here if needed
-});
+// Initialize WebSocket Controller
+const websocketController = new WebsocketController(server, io, app);
 
 // Start server
 server.listen(config.port, () => {
