@@ -7,6 +7,9 @@ A Node.js API server for interacting with Mikrotik RouterOS devices using the Ro
 ```
 ├── index.js                    # Main application entry point
 ├── package.json                # Project dependencies and scripts
+├── ecosystem.config.js         # PM2 ecosystem configuration
+├── .gitignore                  # Git ignore rules
+├── logs/                       # Application logs directory
 ├── config/
 │   └── config.js              # Application configuration
 ├── controllers/
@@ -18,6 +21,89 @@ A Node.js API server for interacting with Mikrotik RouterOS devices using the Ro
 ├── middleware/
 │   └── errorHandler.js        # Error handling middleware
 └── README.md                  # This file
+```
+
+## PM2 Deployment
+
+This project is configured with **automatic CPU detection** that adapts to your server specifications:
+
+- **1 CPU Core**: Uses 1 instance in fork mode (256MB memory limit)
+- **Multiple CPU Cores**: Uses 2 instances in cluster mode (512MB memory limit per instance)
+
+### Quick Start with PM2
+
+1. **Check your system specifications:**
+   ```bash
+   npm run cpu-info
+   ```
+
+2. **Install dependencies:**
+   ```bash
+   npm install
+   ```
+
+3. **Start the application with auto-detection:**
+   ```bash
+   npm run pm2:start
+   ```
+
+4. **Check application status:**
+   ```bash
+   npm run pm2:status
+   ```
+
+### Automatic Configuration Features
+
+✅ **Smart Instance Management**: 
+- 1 core VPS → 1 instance (fork mode)
+- Multi-core VPS → 2 instances max (cluster mode)
+
+✅ **Memory Optimization**:
+- 1 core → 256MB per instance
+- Multi-core → 512MB per instance
+
+✅ **Performance Tuning**:
+- Automatically adjusts Node.js memory settings
+- Optimized for both low-resource and high-performance servers
+
+### PM2 Commands
+
+- **Check CPU info:** `npm run cpu-info`
+- **Start application:** `npm run pm2:start`
+- **Stop application:** `npm run pm2:stop`
+- **Restart application:** `npm run pm2:restart`
+- **Reload application (zero-downtime):** `npm run pm2:reload`
+- **Delete application from PM2:** `npm run pm2:delete`
+- **View logs:** `npm run pm2:logs`
+- **Monitor resources:** `npm run pm2:monit`
+- **Start in production mode:** `npm run pm2:prod`
+
+### PM2 Configuration
+
+The application automatically configures itself based on CPU cores:
+
+**Single Core VPS (1 CPU):**
+- **Mode:** Fork (single process)
+- **Instances:** 1
+- **Memory limit:** 256MB
+- **Best for:** Low-cost VPS, small applications
+
+**Multi-Core VPS (2+ CPUs):**
+- **Mode:** Cluster (load balanced)
+- **Instances:** 2 (optimal performance)
+- **Memory limit:** 512MB per instance
+- **Best for:** Production servers, high-traffic applications
+
+> 💡 **Note**: Even if your VPS has 16+ cores, the configuration uses maximum 2 instances for optimal performance and resource management.
+
+### Environment Variables
+
+Create a `.env` file in the root directory for environment-specific variables:
+
+```env
+NODE_ENV=production
+PORT=3000
+# Add your other environment variables here
 ```
 
 ## Architecture

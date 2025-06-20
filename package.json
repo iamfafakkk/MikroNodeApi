@@ -5,7 +5,20 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "cpu-info": "./detect-cpu.sh",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:start:1core": "pm2 start ecosystem.1core.config.js",
+    "pm2:start:multicore": "pm2 start ecosystem.multicore.config.js",
+    "pm2:stop": "pm2 stop ecosystem.config.js",
+    "pm2:restart": "pm2 restart ecosystem.config.js",
+    "pm2:reload": "pm2 reload ecosystem.config.js",
+    "pm2:delete": "pm2 delete ecosystem.config.js",
+    "pm2:delete:all": "pm2 delete all",
+    "pm2:status": "pm2 status",
+    "pm2:logs": "pm2 logs",
+    "pm2:monit": "pm2 monit",
+    "pm2:prod": "pm2 start ecosystem.config.js --env production"
   },
   "keywords": [],
   "author": "",
