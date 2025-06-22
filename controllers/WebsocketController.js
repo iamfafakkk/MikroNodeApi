@@ -4,7 +4,11 @@ const {
   get_resource_stop,
 } = require("../controller/resource");
 const { Queue_start, Queue_stop } = require("../controller/queue");
-const { formatMemoryUsage, formatHddUsage, formatCpuFrequency } = require("../helpers");
+const {
+  formatMemoryUsage,
+  formatHddUsage,
+  formatCpuFrequency,
+} = require("../helpers");
 
 class WebsocketController {
   constructor(server, io, app) {
@@ -237,6 +241,13 @@ class WebsocketController {
         break;
       case "/monitoring/active":
         await this.handleMonitoringActive(socket, socketId, server, params);
+        break;
+      case "/monitoring/activeMulti":
+        await this.handleMonitoringActiveMulti(
+          socket,
+          socketId,
+          props.data
+        );
         break;
       case "/monitoring/statik":
         await this.handleMonitoringStatik(socket, socketId, server, params);
@@ -826,6 +837,7 @@ class WebsocketController {
               };
               tempResData[0] = {
                 name: active.name,
+                username: active[0].name || "N/A",
                 status,
                 router: server.name,
                 address,
@@ -862,7 +874,7 @@ class WebsocketController {
         console.log(
           `${hitung} ${
             server?.name
-          } ${"/monitoring/active"} dikirim ke ${socketId}`
+          } ${"/monitoring/active"} dikirim ke ${socketId} - ${params}`
         );
         socket.emit("/monitoring/active", tempResData);
       } catch (error) {
@@ -961,6 +973,263 @@ class WebsocketController {
         console.error("Error saat mendapatkan data:", error.message);
       }
     }, 1000);
+    this.activeIntervals.set(socketId, newIntervalId);
+  }
+
+  async handleMonitoringActiveMulti(socket, socketId, userPppoes) {
+    // userPppoes adalah array dari frontend yang berisi multiple server dan param
+    console.log(`Socket connected: ${socketId}`);
+    console.log(`User PPPoEs received:`, userPppoes);
+    
+    if (this.activeIntervals.has(socketId)) {
+      console.log(`Interval untuk socket ${socketId} sudah berjalan`);
+      return;
+    }
+
+    let hitung = 0;
+    const newIntervalId = setInterval(async () => {
+      try {
+        const allResults = [];
+        
+        // Validasi input
+        if (!Array.isArray(userPppoes) || userPppoes.length === 0) {
+          console.log("No user PPPoEs data provided");
+          socket.emit("/monitoring/activeMulti", {
+            total: 0,
+            data: [],
+            timestamp: new Date().toISOString(),
+            error: "No data provided"
+          });
+          return;
+        }
+
+        console.log(`Processing ${userPppoes.length} user PPPoE request(s)`);
+
+        // Process each server/user combination
+        for (const [requestIndex, userPppoe] of userPppoes.entries()) {
+          try {
+            const server = userPppoe.server;
+            const params = userPppoe.data?.param || "";
+
+            if (!server?.ip || !server?.user || !server?.pass) {
+              console.log(`Skipping request ${requestIndex}: Missing server credentials`);
+              continue;
+            }
+
+            // Validasi format IP:Port
+            const ipPort = server.ip.split(":");
+            if (ipPort.length !== 2 || isNaN(ipPort[1])) {
+              console.log(`Skipping request ${requestIndex}: Invalid IP format`);
+              continue;
+            }
+
+            // Membuat kunci unik berbasis objek
+            const connectionKey = JSON.stringify({
+              ip: ipPort[0],
+              port: parseInt(ipPort[1], 10),
+              user: server.user,
+              pass: server.pass,
+            });
+
+            const currentCred = {
+              ip: ipPort[0],
+              port: parseInt(ipPort[1], 10),
+              user: server.user,
+              pass: server.pass,
+            };
+
+            let conn;
+            
+            // Gunakan koneksi yang sudah ada atau buat baru
+            if (this.conns.has(connectionKey)) {
+              console.log(`Using existing connection for ${server.ip}`);
+              conn = this.conns.get(connectionKey);
+
+              // Cek status koneksi
+              if (!conn.connected) {
+                await conn.connect();
+                console.log(`Reconnected to ${server.ip}`);
+              }
+            } else {
+              console.log(`Creating new connection to ${server.ip}`);
+
+              conn = new RouterOSAPI({
+                host: currentCred.ip,
+                port: currentCred.port,
+                user: currentCred.user,
+                password: currentCred.pass,
+                keepalive: true,
+              });
+
+              // Event listeners
+              conn
+                .on("error", (err) => {
+                  console.error(`Connection error [${currentCred.ip}]:`, err.message);
+                })
+                .on("close", () => {
+                  console.log(`Connection closed to ${currentCred.ip}`);
+                })
+                .on("connected", () => {
+                  console.log(`Connected to ${currentCred.ip}`);
+                });
+
+              // Connect with timeout
+              await conn.connect();
+              this.conns.set(connectionKey, conn);
+            }
+
+            // Get active connections for this server/param
+            const paramArray = params ? [params] : [];
+            const activeConnections = await conn.write("/ppp/active/print", paramArray);
+
+            console.log(`Found ${activeConnections.length} active connection(s) for ${server.name} with param: ${params}`);
+
+            // Process each active connection
+            for (const activeConn of activeConnections) {
+              let status = activeConn?.name ? "online" : "offline";
+              let address = activeConn?.address || "N/A";
+              let uptime = activeConn?.uptime || "N/A";
+              let pppoeName =
+                activeConn?.["service"] == "pppoe"
+                  ? "<pppoe-" + activeConn?.name + ">"
+                  : activeConn?.["service"] == "l2tp"
+                  ? "<l2tp-" + activeConn?.name + ">"
+                  : "";
+              let ping = {};
+              let traffic = {};
+
+              if (status === "online" && pppoeName) {
+                // Ping test
+                try {
+                  const pingResult = await conn.write("/ping", [
+                    `=address=${activeConn?.address}`,
+                    "=count=1",
+                  ]);
+                  ping = pingResult[0] || { status: "no-response" };
+                } catch (error) {
+                  console.error(`Ping error for ${activeConn?.name}:`, error.message);
+                  ping = { status: "timeout" };
+                }
+
+                // Traffic monitoring
+                try {
+                  const trafficResult = await conn.write("/interface/monitor-traffic", [
+                    `=interface=${pppoeName}`,
+                    `=once=`,
+                  ]);
+
+                  traffic = {
+                    rate:
+                      (trafficResult?.[0]?.["rx-bits-per-second"] || 0) +
+                      "/" +
+                      (trafficResult?.[0]?.["tx-bits-per-second"] || 0),
+                    rxBytes: trafficResult?.[0]?.["rx-bits-per-second"] || 0,
+                    txBytes: trafficResult?.[0]?.["tx-bits-per-second"] || 0,
+                  };
+                } catch (error) {
+                  console.error(`Traffic error for ${activeConn?.name}:`, error.message);
+                  traffic = { rate: "0/0", rxBytes: 0, txBytes: 0 };
+                }
+              } else {
+                ping = { status: "offline" };
+                traffic = { rate: "0/0", rxBytes: 0, txBytes: 0 };
+              }
+
+              // Add to results
+              allResults.push({
+                name: activeConn?.name || "N/A",
+                username: activeConn?.name || "N/A",
+                status,
+                router: server.name,
+                serverIp: server.ip,
+                address,
+                uptime,
+                service: activeConn?.["service"] || "N/A",
+                traffic,
+                ping,
+                interface: pppoeName,
+                requestParam: params,
+                requestIndex: requestIndex,
+              });
+            }
+
+          } catch (error) {
+            console.error(`Error processing request ${requestIndex}:`, error.message);
+            
+            // Add error entry to results
+            allResults.push({
+              name: "ERROR",
+              username: "ERROR",
+              status: "error",
+              router: userPppoe.server?.name || "Unknown",
+              serverIp: userPppoe.server?.ip || "Unknown",
+              address: "N/A",
+              uptime: "N/A",
+              service: "N/A",
+              traffic: { rate: "0/0", rxBytes: 0, txBytes: 0 },
+              ping: { status: "error" },
+              interface: "N/A",
+              requestParam: userPppoe.data?.param || "",
+              requestIndex: requestIndex,
+              error: error.message,
+            });
+          }
+        }
+
+        // Sort results by router name then by username
+        const finalData = allResults.sort((a, b) => {
+          const routerCompare = (a.router || "").localeCompare(b.router || "");
+          if (routerCompare !== 0) return routerCompare;
+          return (a.name || "").localeCompare(b.name || "");
+        });
+
+        hitung++;
+        if (hitung > 5) {
+          hitung = 0;
+          if (!this.socketsId.has(socketId)) {
+            clearInterval(newIntervalId);
+            this.activeIntervals.delete(socketId);
+            console.log(
+              `Interval untuk socket ${socketId} dihentikan karena sudah melebihi batas`
+            );
+            return;
+          }
+        }
+        
+        console.log(
+          `${hitung} /monitoring/activeMulti dikirim ke ${socketId} - ${finalData.length} total connections from ${userPppoes.length} requests`
+        );
+        
+        // Group results by server for easier frontend handling
+        const groupedByServer = {};
+        finalData.forEach(item => {
+          if (!groupedByServer[item.router]) {
+            groupedByServer[item.router] = [];
+          }
+          groupedByServer[item.router].push(item);
+        });
+        
+        socket.emit("/monitoring/activeMulti", {
+          total: finalData.length,
+          totalRequests: userPppoes.length,
+          data: finalData,
+          groupedByServer: groupedByServer,
+          timestamp: new Date().toISOString(),
+        });
+        
+      } catch (error) {
+        console.error("Error in handleMonitoringActiveMulti:", error.message);
+        socket.emit("/monitoring/activeMulti", {
+          error: error.message,
+          total: 0,
+          totalRequests: 0,
+          data: [],
+          groupedByServer: {},
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }, 1000);
+    
     this.activeIntervals.set(socketId, newIntervalId);
   }
 }

@@ -1,5 +1,5 @@
 const config = {
-  port: process.env.PORT || 3666,
+  port: process.env.PORT || 8585,
   cors: {
     origin: "*",
     methods: ["GET", "POST", "DELETE", "PUT"],
