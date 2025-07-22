@@ -646,6 +646,7 @@ class WebsocketController {
                   address,
                   uptime,
                   traffic,
+                  socket_id: socketId,
                 };
               });
             trafficPromises.push(trafficPromise);
@@ -657,6 +658,7 @@ class WebsocketController {
               address,
               uptime,
               traffic,
+              socket_id: socketId,
             };
           }
         }
