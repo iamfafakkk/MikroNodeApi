@@ -67,9 +67,14 @@ class WebsocketController {
             clearInterval(intervalData.intervalId);
           }
           
-          // Mark socket data as inactive
+          // Mark socket data as inactive and close connection
           if (intervalData.socketData) {
             intervalData.socketData.isActive = false;
+            // Close socket-specific connection if exists
+            if (intervalData.socketData.connection && intervalData.socketData.connection.connected) {
+              intervalData.socketData.connection.close();
+              console.log(`Socket ${socketId} connection closed on disconnect event`);
+            }
           }
           
           this.activeIntervals.delete(socketId);
@@ -576,6 +581,12 @@ class WebsocketController {
   async handleMonitoringPppoe(socket, socketId, server, params) {
     console.log(`Socket connected: ${socketId}`);
     
+    // Validate input parameters
+    if (!socket || !socketId || !server) {
+      console.error(`Invalid parameters for handleMonitoringPppoe: socket=${!!socket}, socketId=${socketId}, server=${!!server}`);
+      return;
+    }
+    
     // Check if interval already exists for this socket
     if (this.activeIntervals.has(socketId)) {
       console.log(`Interval untuk socket ${socketId} sudah berjalan`);
@@ -588,11 +599,71 @@ class WebsocketController {
       return;
     }
 
-    // Create socket-specific data storage
+    // Create socket-specific connection
+    let socketConn = null;
+    try {
+      if (server.ip && server.user && server.pass) {
+        // Validasi format IP:Port
+        const ipPort = server.ip.split(":");
+        if (ipPort.length !== 2 || isNaN(ipPort[1])) {
+          throw new Error("Format IP tidak valid. Harus dalam format IP:PORT");
+        }
+
+        const currentCred = {
+          ip: ipPort[0],
+          port: parseInt(ipPort[1], 10),
+          user: server.user,
+          pass: server.pass,
+        };
+
+        // Create dedicated connection for this socket
+        socketConn = new RouterOSAPI({
+          host: currentCred.ip,
+          port: currentCred.port,
+          user: currentCred.user,
+          password: currentCred.pass,
+          keepalive: true,
+        });
+
+        // Event listeners for socket-specific connection
+        socketConn
+          .on("error", (err) => {
+            console.error(`Socket ${socketId} connection error [${currentCred.ip}]:`, err.message);
+          })
+          .on("close", () => {
+            console.log(`Socket ${socketId} connection closed to ${currentCred.ip}`);
+          })
+          .on("connected", () => {
+            console.log(`Socket ${socketId} connected to ${currentCred.ip}`);
+          });
+
+        // Connect with timeout
+        await socketConn.connect();
+        console.log(`Socket ${socketId} created dedicated connection to ${server.ip}`);
+      }
+    } catch (error) {
+      console.error(`Socket ${socketId} connection error:`, error.message);
+      if (socket.connected) {
+        socket.emit("/monitoring/pppoe", {
+          error: `Connection failed: ${error.message}`,
+          socket_id: socketId,
+          timestamp: new Date().toISOString()
+        });
+      }
+      return;
+    }
+
+    // Create socket-specific data storage with unique identifier
     const socketData = {
       resData: [],
       hitung: 0,
-      isActive: true
+      isActive: true,
+      socketId: socketId,
+      serverName: server?.name || 'unknown',
+      params: params,
+      lastUpdate: new Date().toISOString(),
+      uniqueId: `${socketId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      connection: socketConn
     };
 
     const newIntervalId = setInterval(async () => {
@@ -601,23 +672,46 @@ class WebsocketController {
         if (!socket.connected || !socketData.isActive) {
           clearInterval(newIntervalId);
           this.activeIntervals.delete(socketId);
+          // Close socket-specific connection
+          if (socketData.connection && socketData.connection.connected) {
+            socketData.connection.close();
+            console.log(`Socket ${socketId} connection closed`);
+          }
           console.log(`Interval untuk socket ${socketId} dihentikan - socket tidak terhubung`);
           return;
         }
 
+        // Create socket-specific temporary data arrays
         const tempResData = [];
         const trafficPromises = [];
-        const secret = await this.conn.write("/ppp/secret/print", params);
-        const active = await this.conn.write("/ppp/active/print", params);
+        
+        // Get data with socket-specific error handling
+        let secret, active;
+        try {
+          secret = await socketData.connection.write("/ppp/secret/print", params);
+          active = await socketData.connection.write("/ppp/active/print", params);
+        } catch (error) {
+          console.error(`Error getting data for socket ${socketId}:`, error.message);
+          if (socket.connected) {
+            socket.emit("/monitoring/pppoe", {
+              error: error.message,
+              socket_id: socketId,
+              timestamp: new Date().toISOString()
+            });
+          }
+          return;
+        }
 
         const activeMap = new Map(
           active.map((a) => [a.name, { address: a.address, uptime: a.uptime }])
         );
 
+        // Reset socket-specific data if needed
         if (socketData.resData.length >= secret.length) {
           socketData.resData = [];
         }
 
+        // Process each secret with socket-specific tracking
         for (const [index, element] of secret.entries()) {
           let status = activeMap.has(element.name) ? "online" : "offline";
           let activeData = activeMap.get(element.name) || {};
@@ -632,7 +726,7 @@ class WebsocketController {
           let traffic = {};
 
           if (status === "online" && pppoeName) {
-            const trafficPromise = this.conn
+            const trafficPromise = socketData.connection
               .write("/interface/monitor-traffic", [
                 `=interface=${pppoeName}`,
                 `=once=`,
@@ -647,6 +741,24 @@ class WebsocketController {
                   uptime,
                   traffic,
                   socket_id: socketId,
+                  unique_id: socketData.uniqueId,
+                  item_index: index,
+                  timestamp: new Date().toISOString()
+                };
+              })
+              .catch((error) => {
+                console.error(`Traffic error for ${element.name} on socket ${socketId}:`, error.message);
+                tempResData[index] = {
+                  name: element.name,
+                  status,
+                  router: server.name,
+                  address,
+                  uptime,
+                  traffic: { error: error.message },
+                  socket_id: socketId,
+                  unique_id: socketData.uniqueId,
+                  item_index: index,
+                  timestamp: new Date().toISOString()
                 };
               });
             trafficPromises.push(trafficPromise);
@@ -659,12 +771,17 @@ class WebsocketController {
               uptime,
               traffic,
               socket_id: socketId,
+              unique_id: socketData.uniqueId,
+              item_index: index,
+              timestamp: new Date().toISOString()
             };
           }
         }
 
+        // Wait for all traffic promises to complete
         await Promise.all(trafficPromises);
         socketData.hitung++;
+        socketData.lastUpdate = new Date().toISOString();
         
         // Reset counter every 5 iterations
         if (socketData.hitung > 5) {
@@ -674,28 +791,53 @@ class WebsocketController {
         console.log(
           `${socketData.hitung} ${
             server?.name
-          } ${"/monitoring/pppoe"} dikirim ke ${socketId}`
+          } ${"/monitoring/pppoe"} dikirim ke ${socketId} - ${tempResData.length} items (unique: ${socketData.uniqueId})`
         );
         
         // Double-check socket is still connected before emitting
         if (socket.connected) {
-          socket.emit("/monitoring/pppoe", tempResData);
+          // Final validation - ensure data belongs to this socket
+          const validatedData = tempResData.filter(item => 
+            item && item.socket_id === socketId && item.unique_id === socketData.uniqueId
+          );
+          
+          console.log(`Validating data for socket ${socketId}: ${validatedData.length}/${tempResData.length} items valid`);
+          
+          socket.emit("/monitoring/pppoe", validatedData);
         } else {
           // Socket disconnected, clean up
           clearInterval(newIntervalId);
           this.activeIntervals.delete(socketId);
           socketData.isActive = false;
+          // Close socket-specific connection
+          if (socketData.connection && socketData.connection.connected) {
+            socketData.connection.close();
+            console.log(`Socket ${socketId} connection closed on disconnect`);
+          }
           console.log(`Interval untuk socket ${socketId} dihentikan - socket terputus`);
         }
       } catch (error) {
-        console.error("Error saat mendapatkan data:", error.message);
+        console.error(`Error saat mendapatkan data untuk socket ${socketId}:`, error.message);
         
         // If there's an error, check if socket is still valid
         if (!socket.connected) {
           clearInterval(newIntervalId);
           this.activeIntervals.delete(socketId);
           socketData.isActive = false;
+          // Close socket-specific connection
+          if (socketData.connection && socketData.connection.connected) {
+            socketData.connection.close();
+            console.log(`Socket ${socketId} connection closed on error`);
+          }
           console.log(`Interval untuk socket ${socketId} dihentikan karena error`);
+        } else {
+          // Send error response to specific socket
+          socket.emit("/monitoring/pppoe", {
+            error: error.message,
+            socket_id: socketId,
+            server_name: server?.name,
+            timestamp: new Date().toISOString()
+          });
         }
       }
     }, 1000);
@@ -723,11 +865,14 @@ class WebsocketController {
       return;
     }
 
-    // Create socket-specific data storage
+    // Create socket-specific data storage with unique identifier
     const socketData = {
       resData: [],
       hitung: 0,
-      isActive: true
+      isActive: true,
+      socketId: socketId,
+      serverName: server?.name || 'unknown',
+      params: params
     };
 
     const newIntervalId = setInterval(async () => {
@@ -740,11 +885,25 @@ class WebsocketController {
           return;
         }
 
-        const bindings = await this.conn.write(
-          "/ip/hotspot/ip-binding/print",
-          params
-        );
-        const hosts = await this.conn.write("/ip/hotspot/host/print", params);
+        // Get data with socket-specific error handling
+        let bindings, hosts;
+        try {
+          bindings = await this.conn.write(
+            "/ip/hotspot/ip-binding/print",
+            params
+          );
+          hosts = await this.conn.write("/ip/hotspot/host/print", params);
+        } catch (error) {
+          console.error(`Error getting data for socket ${socketId}:`, error.message);
+          if (socket.connected) {
+            socket.emit("/monitoring/static", {
+              error: error.message,
+              socket_id: socketId,
+              timestamp: new Date().toISOString()
+            });
+          }
+          return;
+        }
 
         const activeMap = new Map(
           hosts.map((host) => [
@@ -757,16 +916,19 @@ class WebsocketController {
           ])
         );
 
+        // Reset socket-specific data if needed
         if (socketData.resData.length >= bindings.length) {
           socketData.resData = [];
         }
 
+        // Process each binding with socket-specific tracking
+        const tempResData = [];
         bindings.forEach((binding) => {
           const macAddress = binding["mac-address"];
           const isOnline = activeMap.has(macAddress);
           const activeData = activeMap.get(macAddress) || {};
 
-          socketData.resData.push({
+          tempResData.push({
             name: binding.comment || activeData.address || "N/A",
             bypassed: binding.bypassed,
             uptime: activeData.uptime,
@@ -774,6 +936,8 @@ class WebsocketController {
             router: server.name,
             address: activeData.address,
             idle: activeData.idle,
+            socket_id: socketId,
+            timestamp: new Date().toISOString()
           });
         });
 
@@ -787,12 +951,18 @@ class WebsocketController {
         console.log(
           `${socketData.hitung} ${
             server?.name
-          } ${"/monitoring/static"} dikirim ke ${socketId}`
+          } ${"/monitoring/static"} dikirim ke ${socketId} - ${tempResData.length} items`
         );
         
         // Double-check socket is still connected before emitting
         if (socket.connected) {
-          socket.emit("/monitoring/static", socketData.resData);
+          socket.emit("/monitoring/static", {
+            data: tempResData,
+            socket_id: socketId,
+            server_name: server?.name,
+            total_items: tempResData.length,
+            timestamp: new Date().toISOString()
+          });
         } else {
           // Socket disconnected, clean up
           clearInterval(newIntervalId);
@@ -809,6 +979,14 @@ class WebsocketController {
           this.activeIntervals.delete(socketId);
           socketData.isActive = false;
           console.log(`Interval untuk socket ${socketId} dihentikan karena error`);
+        } else {
+          // Send error response to specific socket
+          socket.emit("/monitoring/static", {
+            error: error.message,
+            socket_id: socketId,
+            server_name: server?.name,
+            timestamp: new Date().toISOString()
+          });
         }
       }
     }, 1000);
