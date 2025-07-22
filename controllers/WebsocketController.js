@@ -60,28 +60,32 @@ class WebsocketController {
         console.log(`Socket disconnected: ${socketId}`);
 
         if (this.activeIntervals.has(socketId)) {
-          clearInterval(this.activeIntervals.get(socketId));
+          const intervalData = this.activeIntervals.get(socketId);
+          
+          // Clear the interval
+          if (intervalData.intervalId) {
+            clearInterval(intervalData.intervalId);
+          }
+          
+          // Mark socket data as inactive
+          if (intervalData.socketData) {
+            intervalData.socketData.isActive = false;
+          }
+          
           this.activeIntervals.delete(socketId);
           console.log(
             `Data untuk socket ${socketId} dihapus dari map activeIntervals`
           );
-
-          const targetSocket = this.io.sockets.sockets.get(socketId);
-          if (targetSocket) {
-            console.log(`Interval untuk socket ${socketId} dihentikan`);
-            targetSocket.on("disconnect", () => {
-              console.log(`Interval dihentikan`);
-              if (this.streaming) {
-                this.streaming.stop();
-              }
-              console.log(`Socket disconnected: ${socketId}`);
-            });
-          }
         }
 
-        this.activeStreams.forEach((stream, key) => {
+        this.activeStreams.forEach((streamData, key) => {
           if (key === socketId) {
-            stream.stop();
+            if (streamData.stream) {
+              streamData.stream.stop();
+            }
+            if (streamData.socketData) {
+              streamData.socketData.isActive = false;
+            }
           }
         });
 
@@ -571,15 +575,36 @@ class WebsocketController {
 
   async handleMonitoringPppoe(socket, socketId, server, params) {
     console.log(`Socket connected: ${socketId}`);
+    
+    // Check if interval already exists for this socket
     if (this.activeIntervals.has(socketId)) {
       console.log(`Interval untuk socket ${socketId} sudah berjalan`);
       return;
     }
 
-    let resData = [];
-    let hitung = 0;
+    // Validate socket is still connected
+    if (!socket.connected) {
+      console.log(`Socket ${socketId} tidak terhubung`);
+      return;
+    }
+
+    // Create socket-specific data storage
+    const socketData = {
+      resData: [],
+      hitung: 0,
+      isActive: true
+    };
+
     const newIntervalId = setInterval(async () => {
       try {
+        // Check if socket is still connected and interval is still active
+        if (!socket.connected || !socketData.isActive) {
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          console.log(`Interval untuk socket ${socketId} dihentikan - socket tidak terhubung`);
+          return;
+        }
+
         const tempResData = [];
         const trafficPromises = [];
         const secret = await this.conn.write("/ppp/secret/print", params);
@@ -589,8 +614,8 @@ class WebsocketController {
           active.map((a) => [a.name, { address: a.address, uptime: a.uptime }])
         );
 
-        if (resData.length >= secret.length) {
-          resData = [];
+        if (socketData.resData.length >= secret.length) {
+          socketData.resData = [];
         }
 
         for (const [index, element] of secret.entries()) {
@@ -637,41 +662,82 @@ class WebsocketController {
         }
 
         await Promise.all(trafficPromises);
-        hitung++;
-        if (hitung > 5) {
-          hitung = 0;
-          if (!this.socketsId.has(socketId)) {
-            clearInterval(newIntervalId);
-            this.activeIntervals.delete(socketId);
-            console.log(
-              `Interval untuk socket ${socketId} dihentikan karena sudah melebihi batas`
-            );
-          }
+        socketData.hitung++;
+        
+        // Reset counter every 5 iterations
+        if (socketData.hitung > 5) {
+          socketData.hitung = 0;
         }
+        
         console.log(
-          `${hitung} ${
+          `${socketData.hitung} ${
             server?.name
           } ${"/monitoring/pppoe"} dikirim ke ${socketId}`
         );
-        socket.emit("/monitoring/pppoe", tempResData);
+        
+        // Double-check socket is still connected before emitting
+        if (socket.connected) {
+          socket.emit("/monitoring/pppoe", tempResData);
+        } else {
+          // Socket disconnected, clean up
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          socketData.isActive = false;
+          console.log(`Interval untuk socket ${socketId} dihentikan - socket terputus`);
+        }
       } catch (error) {
         console.error("Error saat mendapatkan data:", error.message);
+        
+        // If there's an error, check if socket is still valid
+        if (!socket.connected) {
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          socketData.isActive = false;
+          console.log(`Interval untuk socket ${socketId} dihentikan karena error`);
+        }
       }
     }, 1000);
-    this.activeIntervals.set(socketId, newIntervalId);
+    
+    // Store interval with socket data for proper cleanup
+    this.activeIntervals.set(socketId, {
+      intervalId: newIntervalId,
+      socketData: socketData,
+      socket: socket
+    });
   }
 
   async handleMonitoringStatic(socket, socketId, server, params) {
     console.log(`Socket connected: ${socketId}`);
+    
+    // Check if interval already exists for this socket
     if (this.activeIntervals.has(socketId)) {
       console.log(`Interval untuk socket ${socketId} sudah berjalan`);
       return;
     }
 
-    let resData = [];
-    let hitung = 0;
+    // Validate socket is still connected
+    if (!socket.connected) {
+      console.log(`Socket ${socketId} tidak terhubung`);
+      return;
+    }
+
+    // Create socket-specific data storage
+    const socketData = {
+      resData: [],
+      hitung: 0,
+      isActive: true
+    };
+
     const newIntervalId = setInterval(async () => {
       try {
+        // Check if socket is still connected and interval is still active
+        if (!socket.connected || !socketData.isActive) {
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          console.log(`Interval untuk socket ${socketId} dihentikan - socket tidak terhubung`);
+          return;
+        }
+
         const bindings = await this.conn.write(
           "/ip/hotspot/ip-binding/print",
           params
@@ -689,8 +755,8 @@ class WebsocketController {
           ])
         );
 
-        if (resData.length >= bindings.length) {
-          resData = [];
+        if (socketData.resData.length >= bindings.length) {
+          socketData.resData = [];
         }
 
         bindings.forEach((binding) => {
@@ -698,7 +764,7 @@ class WebsocketController {
           const isOnline = activeMap.has(macAddress);
           const activeData = activeMap.get(macAddress) || {};
 
-          resData.push({
+          socketData.resData.push({
             name: binding.comment || activeData.address || "N/A",
             bypassed: binding.bypassed,
             uptime: activeData.uptime,
@@ -709,46 +775,85 @@ class WebsocketController {
           });
         });
 
-        hitung++;
-        if (hitung > 5) {
-          hitung = 0;
-          if (!this.socketsId.has(socketId)) {
-            clearInterval(newIntervalId);
-            this.activeIntervals.delete(socketId);
-            console.log(
-              `Interval untuk socket ${socketId} dihentikan karena sudah melebihi batas`
-            );
-          }
+        socketData.hitung++;
+        
+        // Reset counter every 5 iterations
+        if (socketData.hitung > 5) {
+          socketData.hitung = 0;
         }
+        
         console.log(
-          `${hitung} ${
+          `${socketData.hitung} ${
             server?.name
           } ${"/monitoring/static"} dikirim ke ${socketId}`
         );
-        socket.emit("/monitoring/static", resData);
+        
+        // Double-check socket is still connected before emitting
+        if (socket.connected) {
+          socket.emit("/monitoring/static", socketData.resData);
+        } else {
+          // Socket disconnected, clean up
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          socketData.isActive = false;
+          console.log(`Interval untuk socket ${socketId} dihentikan - socket terputus`);
+        }
       } catch (error) {
         console.error(`Error pada socket ${socketId}:`, error.message);
+        
+        // If there's an error, check if socket is still valid
+        if (!socket.connected) {
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          socketData.isActive = false;
+          console.log(`Interval untuk socket ${socketId} dihentikan karena error`);
+        }
       }
     }, 1000);
-    this.activeIntervals.set(socketId, newIntervalId);
+    
+    // Store interval with socket data for proper cleanup
+    this.activeIntervals.set(socketId, {
+      intervalId: newIntervalId,
+      socketData: socketData,
+      socket: socket
+    });
   }
 
   async handleInterfaceMonitorTraffic(socket, socketId, params) {
-    const activeSocket = new Map();
     console.log(`Socket connected: ${socketId}`);
     console.log("streaming monitor-traffic");
 
-    if (activeSocket.has(socketId)) {
+    // Check if stream already exists for this socket
+    if (this.activeStreams.has(socketId)) {
       console.log(`Stream already exists for socketId: ${socketId}`);
       return;
     }
 
-    let streamHitung = 0;
+    // Validate socket is still connected
+    if (!socket.connected) {
+      console.log(`Socket ${socketId} tidak terhubung`);
+      return;
+    }
+
+    // Create socket-specific data storage
+    const socketData = {
+      streamHitung: 0,
+      isActive: true
+    };
+
     var streaming2 = await this.conn.stream(
       "/interface/monitor-traffic",
       params,
       (error, packet) => {
         if (!error) {
+          // Check if socket is still connected and stream is still active
+          if (!socket.connected || !socketData.isActive) {
+            streaming2.stop();
+            this.activeStreams.delete(socketId);
+            console.log(`Stream untuk socket ${socketId} dihentikan - socket tidak terhubung`);
+            return;
+          }
+
           const emitx = {
             rate:
               (packet?.[0]?.["rx-bits-per-second"] || 0) +
@@ -756,45 +861,65 @@ class WebsocketController {
               (packet?.[0]?.["tx-bits-per-second"] || 0),
           };
           console.log(`${emitx.rate} dikirim ke ${socketId}`);
-          const targetSocket = this.io.sockets.sockets.get(socketId);
-          if (targetSocket) {
-            streamHitung++;
-            if (streamHitung > 50) {
-              streamHitung = 0;
-              streaming2.stop();
-              console.log(`Socket disconnected: ${socketId}`);
-              activeSocket.delete(socketId);
+          
+          // Double-check socket is still connected before emitting
+          if (socket.connected) {
+            socketData.streamHitung++;
+            if (socketData.streamHitung > 50) {
+              socketData.streamHitung = 0;
             }
-            targetSocket.emit("/interface/monitor-traffic", emitx || {});
+            socket.emit("/interface/monitor-traffic", emitx || {});
           } else {
-            console.log(`Socket with id ${socketId} not found`);
+            // Socket disconnected, clean up
+            streaming2.stop();
+            this.activeStreams.delete(socketId);
+            socketData.isActive = false;
+            console.log(`Stream untuk socket ${socketId} dihentikan - socket terputus`);
           }
         } else {
           console.log(error);
+          
+          // If there's an error, check if socket is still valid
+          if (!socket.connected) {
+            streaming2.stop();
+            this.activeStreams.delete(socketId);
+            socketData.isActive = false;
+            console.log(`Stream untuk socket ${socketId} dihentikan karena error`);
+          }
         }
       }
     );
 
-    activeSocket.set(socketId, streaming2);
-    const targetSocket = this.io.sockets.sockets.get(socketId);
-    if (targetSocket) {
-      targetSocket.on("disconnect", () => {
-        streaming2.stop();
-        console.log(`Socket disconnected: ${socketId}`);
-        activeSocket.delete(socketId);
-      });
-    }
+    // Store stream with socket data for proper cleanup
+    this.activeStreams.set(socketId, {
+      stream: streaming2,
+      socketData: socketData,
+      socket: socket
+    });
   }
 
   async handleMonitoringActive(socket, socketId, server, params) {
     console.log(`Socket connected: ${socketId}`);
+    
+    // Check if interval already exists for this socket
     if (this.activeIntervals.has(socketId)) {
       console.log(`Interval untuk socket ${socketId} sudah berjalan`);
       return;
     }
 
-    let resData = [];
-    let hitung = 0;
+    // Validate socket is still connected
+    if (!socket.connected) {
+      console.log(`Socket ${socketId} tidak terhubung`);
+      return;
+    }
+
+    // Create socket-specific data storage
+    const socketData = {
+      resData: [],
+      hitung: 0,
+      isActive: true
+    };
+
     const newIntervalId = setInterval(async () => {
       try {
         const tempResData = [];
@@ -860,39 +985,72 @@ class WebsocketController {
         }
 
         await Promise.all(trafficPromises);
-        hitung++;
-        if (hitung > 5) {
-          hitung = 0;
-          if (!this.socketsId.has(socketId)) {
-            clearInterval(newIntervalId);
-            this.activeIntervals.delete(socketId);
-            console.log(
-              `Interval untuk socket ${socketId} dihentikan karena sudah melebihi batas`
-            );
-          }
+        socketData.hitung++;
+        
+        // Reset counter every 5 iterations
+        if (socketData.hitung > 5) {
+          socketData.hitung = 0;
         }
+        
         console.log(
-          `${hitung} ${
+          `${socketData.hitung} ${
             server?.name
           } ${"/monitoring/active"} dikirim ke ${socketId} - ${params}`
         );
-        socket.emit("/monitoring/active", tempResData);
+        
+        // Double-check socket is still connected before emitting
+        if (socket.connected) {
+          socket.emit("/monitoring/active", tempResData);
+        } else {
+          // Socket disconnected, clean up
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          socketData.isActive = false;
+          console.log(`Interval untuk socket ${socketId} dihentikan - socket terputus`);
+        }
       } catch (error) {
         console.error("Error saat mendapatkan data:", error.message);
+        
+        // If there's an error, check if socket is still valid
+        if (!socket.connected) {
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          socketData.isActive = false;
+          console.log(`Interval untuk socket ${socketId} dihentikan karena error`);
+        }
       }
     }, 1000);
-    this.activeIntervals.set(socketId, newIntervalId);
+    
+    // Store interval with socket data for proper cleanup
+    this.activeIntervals.set(socketId, {
+      intervalId: newIntervalId,
+      socketData: socketData,
+      socket: socket
+    });
   }
 
   async handleMonitoringStatik(socket, socketId, server, params) {
     console.log(`Socket connected: ${socketId}`);
+    
+    // Check if interval already exists for this socket
     if (this.activeIntervals.has(socketId)) {
       console.log(`Interval untuk socket ${socketId} sudah berjalan`);
       return;
     }
 
-    let resData = [];
-    let hitung = 0;
+    // Validate socket is still connected
+    if (!socket.connected) {
+      console.log(`Socket ${socketId} tidak terhubung`);
+      return;
+    }
+
+    // Create socket-specific data storage
+    const socketData = {
+      resData: [],
+      hitung: 0,
+      isActive: true
+    };
+
     const newIntervalId = setInterval(async () => {
       try {
         const tempResData = [];
@@ -951,29 +1109,49 @@ class WebsocketController {
         }
 
         await Promise.all(trafficPromises);
-        hitung++;
-        if (hitung > 5) {
-          hitung = 0;
-          if (!this.socketsId.has(socketId)) {
-            clearInterval(newIntervalId);
-            this.activeIntervals.delete(socketId);
-            console.log(
-              `Interval untuk socket ${socketId} dihentikan karena sudah melebihi batas`
-            );
-          }
+        socketData.hitung++;
+        
+        // Reset counter every 5 iterations
+        if (socketData.hitung > 5) {
+          socketData.hitung = 0;
         }
+        
         console.log(
-          `${hitung} ${
+          `${socketData.hitung} ${
             server?.name
           } ${"/monitoring/statik"} dikirim ke ${socketId}`
         );
         console.log(tempResData);
-        socket.emit("/monitoring/statik", tempResData);
+        
+        // Double-check socket is still connected before emitting
+        if (socket.connected) {
+          socket.emit("/monitoring/statik", tempResData);
+        } else {
+          // Socket disconnected, clean up
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          socketData.isActive = false;
+          console.log(`Interval untuk socket ${socketId} dihentikan - socket terputus`);
+        }
       } catch (error) {
         console.error("Error saat mendapatkan data:", error.message);
+        
+        // If there's an error, check if socket is still valid
+        if (!socket.connected) {
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          socketData.isActive = false;
+          console.log(`Interval untuk socket ${socketId} dihentikan karena error`);
+        }
       }
     }, 1000);
-    this.activeIntervals.set(socketId, newIntervalId);
+    
+    // Store interval with socket data for proper cleanup
+    this.activeIntervals.set(socketId, {
+      intervalId: newIntervalId,
+      socketData: socketData,
+      socket: socket
+    });
   }
 
   async handleMonitoringActiveMulti(socket, socketId, userPppoes) {
@@ -981,25 +1159,47 @@ class WebsocketController {
     console.log(`Socket connected: ${socketId}`);
     console.log(`User PPPoEs received:`, userPppoes);
     
+    // Check if interval already exists for this socket
     if (this.activeIntervals.has(socketId)) {
       console.log(`Interval untuk socket ${socketId} sudah berjalan`);
       return;
     }
 
-    let hitung = 0;
+    // Validate socket is still connected
+    if (!socket.connected) {
+      console.log(`Socket ${socketId} tidak terhubung`);
+      return;
+    }
+
+    // Create socket-specific data storage
+    const socketData = {
+      hitung: 0,
+      isActive: true
+    };
+
     const newIntervalId = setInterval(async () => {
       try {
         const allResults = [];
         
+        // Check if socket is still connected and interval is still active
+        if (!socket.connected || !socketData.isActive) {
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          console.log(`Interval untuk socket ${socketId} dihentikan - socket tidak terhubung`);
+          return;
+        }
+
         // Validasi input
         if (!Array.isArray(userPppoes) || userPppoes.length === 0) {
           console.log("No user PPPoEs data provided");
-          socket.emit("/monitoring/activeMulti", {
-            total: 0,
-            data: [],
-            timestamp: new Date().toISOString(),
-            error: "No data provided"
-          });
+          if (socket.connected) {
+            socket.emit("/monitoring/activeMulti", {
+              total: 0,
+              data: [],
+              timestamp: new Date().toISOString(),
+              error: "No data provided"
+            });
+          }
           return;
         }
 
@@ -1183,21 +1383,15 @@ class WebsocketController {
           return (a.name || "").localeCompare(b.name || "");
         });
 
-        hitung++;
-        if (hitung > 5) {
-          hitung = 0;
-          if (!this.socketsId.has(socketId)) {
-            clearInterval(newIntervalId);
-            this.activeIntervals.delete(socketId);
-            console.log(
-              `Interval untuk socket ${socketId} dihentikan karena sudah melebihi batas`
-            );
-            return;
-          }
+        socketData.hitung++;
+        
+        // Reset counter every 5 iterations
+        if (socketData.hitung > 5) {
+          socketData.hitung = 0;
         }
         
         console.log(
-          `${hitung} /monitoring/activeMulti dikirim ke ${socketId} - ${finalData.length} total connections from ${userPppoes.length} requests`
+          `${socketData.hitung} /monitoring/activeMulti dikirim ke ${socketId} - ${finalData.length} total connections from ${userPppoes.length} requests`
         );
         
         // Group results by server for easier frontend handling
@@ -1209,28 +1403,51 @@ class WebsocketController {
           groupedByServer[item.router].push(item);
         });
         
-        socket.emit("/monitoring/activeMulti", {
-          total: finalData.length,
-          totalRequests: userPppoes.length,
-          data: finalData,
-          groupedByServer: groupedByServer,
-          timestamp: new Date().toISOString(),
-        });
+        // Double-check socket is still connected before emitting
+        if (socket.connected) {
+          socket.emit("/monitoring/activeMulti", {
+            total: finalData.length,
+            totalRequests: userPppoes.length,
+            data: finalData,
+            groupedByServer: groupedByServer,
+            timestamp: new Date().toISOString(),
+          });
+        } else {
+          // Socket disconnected, clean up
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          socketData.isActive = false;
+          console.log(`Interval untuk socket ${socketId} dihentikan - socket terputus`);
+        }
         
       } catch (error) {
         console.error("Error in handleMonitoringActiveMulti:", error.message);
-        socket.emit("/monitoring/activeMulti", {
-          error: error.message,
-          total: 0,
-          totalRequests: 0,
-          data: [],
-          groupedByServer: {},
-          timestamp: new Date().toISOString(),
-        });
+        
+        // If there's an error, check if socket is still valid
+        if (!socket.connected) {
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          socketData.isActive = false;
+          console.log(`Interval untuk socket ${socketId} dihentikan karena error`);
+        } else {
+          socket.emit("/monitoring/activeMulti", {
+            error: error.message,
+            total: 0,
+            totalRequests: 0,
+            data: [],
+            groupedByServer: {},
+            timestamp: new Date().toISOString(),
+          });
+        }
       }
     }, 1000);
     
-    this.activeIntervals.set(socketId, newIntervalId);
+    // Store interval with socket data for proper cleanup
+    this.activeIntervals.set(socketId, {
+      intervalId: newIntervalId,
+      socketData: socketData,
+      socket: socket
+    });
   }
 }
 
