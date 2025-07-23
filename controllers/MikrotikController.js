@@ -39,40 +39,33 @@ class MikrotikController {
       if (this.credMap.has(key)) {
         console.log("Using existing connection for", req.body.cred.name);
         const conn = this.connMap.get(key);
+        await conn.connect();
         
+        let data;
         try {
-          await conn.connect();
-          const data = await conn.write(req.body.cmd, req.body.data);
-
-          if (remove && data && data.length > 0 && data[0][".id"]) {
-            console.log("Removing command");
-            await conn.write(req.body.cmd.replace(/\/print$/, "/remove"), [
-              "=.id=" + data[0][".id"],
-            ]);
+          data = await conn.write(req.body.cmd, req.body.data);
+        } catch (err) {
+          // Handle "!empty" reply error - treat as empty data
+          if (err?.errno === 'UNKNOWNREPLY' && err?.message?.includes('!empty')) {
+            console.log("Received !empty reply, treating as empty data");
+            data = [];
+          } else {
+            throw err; // Re-throw other errors
           }
-
-          return res.status(200).json({
-            statusCode: 200,
-            message: "Successfully executed command",
-            data,
-          });
-        } catch (writeErr) {
-          console.error("Error executing command on existing connection:", writeErr?.message || writeErr);
-          
-          // Handle specific Mikrotik API errors
-          if (writeErr?.errno === 'UNKNOWNREPLY' || writeErr?.message?.includes('!empty')) {
-            return res.status(200).json({
-              statusCode: 200,
-              message: "Command executed successfully (no data returned)",
-              data: [],
-              note: "The command returned no data, which is normal for some operations"
-            });
-          }
-          
-          // For other errors, close connection and try to reconnect
-          await this.closeConnection(key);
-          throw writeErr;
         }
+
+        if (remove && data && data.length > 0) {
+          console.log("Removing command");
+          await conn.write(req.body.cmd.replace(/\/print$/, "/remove"), [
+            "=.id=" + data[0][".id"],
+          ]);
+        }
+
+        return res.status(200).json({
+          statusCode: 200,
+          message: "Successfully executed command",
+          data: data || [],
+        });
       }
 
       // Close previous connection if exists
@@ -107,63 +100,39 @@ class MikrotikController {
 
       console.log("Connected to Mikrotik:", req.body.cred.name);
       
-      // Execute command with enhanced error handling
+      // Execute command
+      let data;
       try {
-        const data = await conn.write(req.body.cmd, req.body.data);
-
-        if (remove && data && data.length > 0 && data[0][".id"]) {
-          console.log("Removing command");
-          await conn.write(req.body.cmd.replace(/\/print$/, "/remove"), [
-            "=.id=" + data[0][".id"],
-          ]);
+        data = await conn.write(req.body.cmd, req.body.data);
+      } catch (err) {
+        // Handle "!empty" reply error - treat as empty data
+        if (err?.errno === 'UNKNOWNREPLY' && err?.message?.includes('!empty')) {
+          console.log("Received !empty reply, treating as empty data");
+          data = [];
+        } else {
+          throw err; // Re-throw other errors
         }
-
-        res.status(200).json({
-          statusCode: 200,
-          message: "Successfully executed command",
-          data,
-        });
-      } catch (writeErr) {
-        console.error("Error executing command:", writeErr?.message || writeErr);
-        
-        // Handle specific Mikrotik API errors
-        if (writeErr?.errno === 'UNKNOWNREPLY' || writeErr?.message?.includes('!empty')) {
-          return res.status(200).json({
-            statusCode: 200,
-            message: "Command executed successfully (no data returned)",
-            data: [],
-            note: "The command returned no data, which is normal for some operations"
-          });
-        }
-        
-        // For other write errors, close connection and throw
-        await this.closeConnection(key);
-        throw writeErr;
       }
+
+      if (remove && data && data.length > 0) {
+        console.log("Removing command");
+        await conn.write(req.body.cmd.replace(/\/print$/, "/remove"), [
+          "=.id=" + data[0][".id"],
+        ]);
+      }
+
+      res.status(200).json({
+        statusCode: 200,
+        message: "Successfully executed command",
+        data: data || [],
+      });
 
     } catch (err) {
-      console.error("Mikrotik operation error:", err?.message || err);
-      
-      // Determine appropriate error message
-      let errorMessage = "An error occurred while executing the command";
-      
-      if (err?.errno === 'UNKNOWNREPLY') {
-        errorMessage = "Received unexpected response from Mikrotik device";
-      } else if (err?.message?.includes('!empty')) {
-        errorMessage = "Command returned no data (this may be normal for some operations)";
-      } else if (err?.message?.includes('connection')) {
-        errorMessage = "Connection error with Mikrotik device";
-      } else if (err?.message?.includes('authentication')) {
-        errorMessage = "Authentication failed with Mikrotik device";
-      } else if (err?.message) {
-        errorMessage = err.message;
-      }
-      
+      console.error(err?.message || err);
       await this.closeConnection(key);
       res.status(400).json({
         statusCode: 400,
-        message: errorMessage,
-        error: err?.errno || 'UNKNOWN_ERROR'
+        message: err.message || "An error occurred",
       });
     }
   }
