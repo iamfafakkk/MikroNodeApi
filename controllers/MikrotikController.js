@@ -39,21 +39,40 @@ class MikrotikController {
       if (this.credMap.has(key)) {
         console.log("Using existing connection for", req.body.cred.name);
         const conn = this.connMap.get(key);
-        await conn.connect();
-        const data = await conn.write(req.body.cmd, req.body.data);
+        
+        try {
+          await conn.connect();
+          const data = await conn.write(req.body.cmd, req.body.data);
 
-        if (remove) {
-          console.log("Removing command");
-          await conn.write(req.body.cmd.replace(/\/print$/, "/remove"), [
-            "=.id=" + data[0][".id"],
-          ]);
+          if (remove && data && data.length > 0 && data[0][".id"]) {
+            console.log("Removing command");
+            await conn.write(req.body.cmd.replace(/\/print$/, "/remove"), [
+              "=.id=" + data[0][".id"],
+            ]);
+          }
+
+          return res.status(200).json({
+            statusCode: 200,
+            message: "Successfully executed command",
+            data,
+          });
+        } catch (writeErr) {
+          console.error("Error executing command on existing connection:", writeErr?.message || writeErr);
+          
+          // Handle specific Mikrotik API errors
+          if (writeErr?.errno === 'UNKNOWNREPLY' || writeErr?.message?.includes('!empty')) {
+            return res.status(200).json({
+              statusCode: 200,
+              message: "Command executed successfully (no data returned)",
+              data: [],
+              note: "The command returned no data, which is normal for some operations"
+            });
+          }
+          
+          // For other errors, close connection and try to reconnect
+          await this.closeConnection(key);
+          throw writeErr;
         }
-
-        return res.status(200).json({
-          statusCode: 200,
-          message: "Successfully executed command",
-          data,
-        });
       }
 
       // Close previous connection if exists
@@ -88,28 +107,63 @@ class MikrotikController {
 
       console.log("Connected to Mikrotik:", req.body.cred.name);
       
-      // Execute command
-      const data = await conn.write(req.body.cmd, req.body.data);
+      // Execute command with enhanced error handling
+      try {
+        const data = await conn.write(req.body.cmd, req.body.data);
 
-      if (remove) {
-        console.log("Removing command");
-        await conn.write(req.body.cmd.replace(/\/print$/, "/remove"), [
-          "=.id=" + data[0][".id"],
-        ]);
+        if (remove && data && data.length > 0 && data[0][".id"]) {
+          console.log("Removing command");
+          await conn.write(req.body.cmd.replace(/\/print$/, "/remove"), [
+            "=.id=" + data[0][".id"],
+          ]);
+        }
+
+        res.status(200).json({
+          statusCode: 200,
+          message: "Successfully executed command",
+          data,
+        });
+      } catch (writeErr) {
+        console.error("Error executing command:", writeErr?.message || writeErr);
+        
+        // Handle specific Mikrotik API errors
+        if (writeErr?.errno === 'UNKNOWNREPLY' || writeErr?.message?.includes('!empty')) {
+          return res.status(200).json({
+            statusCode: 200,
+            message: "Command executed successfully (no data returned)",
+            data: [],
+            note: "The command returned no data, which is normal for some operations"
+          });
+        }
+        
+        // For other write errors, close connection and throw
+        await this.closeConnection(key);
+        throw writeErr;
       }
 
-      res.status(200).json({
-        statusCode: 200,
-        message: "Successfully executed command",
-        data,
-      });
-
     } catch (err) {
-      console.error(err?.message || err);
+      console.error("Mikrotik operation error:", err?.message || err);
+      
+      // Determine appropriate error message
+      let errorMessage = "An error occurred while executing the command";
+      
+      if (err?.errno === 'UNKNOWNREPLY') {
+        errorMessage = "Received unexpected response from Mikrotik device";
+      } else if (err?.message?.includes('!empty')) {
+        errorMessage = "Command returned no data (this may be normal for some operations)";
+      } else if (err?.message?.includes('connection')) {
+        errorMessage = "Connection error with Mikrotik device";
+      } else if (err?.message?.includes('authentication')) {
+        errorMessage = "Authentication failed with Mikrotik device";
+      } else if (err?.message) {
+        errorMessage = err.message;
+      }
+      
       await this.closeConnection(key);
       res.status(400).json({
         statusCode: 400,
-        message: err.message || "An error occurred",
+        message: errorMessage,
+        error: err?.errno || 'UNKNOWN_ERROR'
       });
     }
   }
