@@ -1,11 +1,14 @@
-// PM2 Ecosystem Configuration for 1 Core VPS
+// PM2 Ecosystem - Fork mode (1 core) untuk VPS high spec
 module.exports = {
   apps: [
     {
       name: "mikro-node-api",
       script: "./index.js",
+      exec_mode: "fork",       // Hanya 1 proses
       instances: 1,
-      exec_mode: "fork", // Fork mode untuk 1 core
+
+      // ---- ENV ----
+      env_file: ".env",
       env: {
         NODE_ENV: "development",
         PORT: 8585
@@ -14,40 +17,40 @@ module.exports = {
         NODE_ENV: "production",
         PORT: 8585
       },
-      // Logging
-      log_file: "./logs/combined.log",
-      out_file: "./logs/out.log",
-      error_file: "./logs/error.log",
-      log_date_format: "YYYY-MM-DD HH:mm:ss Z",
-      
-      // Advanced settings untuk VPS 1 core
-      max_memory_restart: "512M", // Lebih konservatif untuk 1 core
-      node_args: "--max-old-space-size=512",
-      
-      // Watch and restart settings
-      watch: false,
-      ignore_watch: ["node_modules", "logs"],
-      
-      // Auto restart settings
-      autorestart: true,
-      max_restarts: 5, // Lebih sedikit restart untuk stabilitas
-      min_uptime: "30s", // Waktu minimum lebih lama
-      
-      // Health monitoring
-      health_check_timeout: 60000, // Timeout lebih lama untuk 1 core
-      health_check_grace_period: 30000,
-      
-      // Process management
-      kill_timeout: 10000, // Lebih lama untuk graceful shutdown
-      wait_ready: true,
-      listen_timeout: 15000, // Timeout lebih lama
-      
-      // Additional environment variables
-      env_file: ".env",
-      
-      // Performance optimizations for single core
+
+      // ---- LOGGING ----
+      out_file: "/var/log/mikro-node-api/out.log",
+      error_file: "/var/log/mikro-node-api/err.log",
       merge_logs: true,
-      time: true
+      time: true,
+      log_date_format: "YYYY-MM-DD HH:mm:ss Z",
+      vizion: false, // matikan auto git scan, hemat CPU
+
+      // ---- RELIABILITY ----
+      autorestart: true,
+      min_uptime: 5000,                // dianggap "up" jika ≥5s
+      max_restarts: 15,                // restart loop limit
+      restart_delay: 2000,             // jeda antar-restart
+      exp_backoff_restart_delay: 200,  // backoff kalau crash cepat
+
+      // ---- RESOURCE GUARD ----
+      // walau RAM gede, jangan dibiarkan liar. Limit 1 GB cukup.
+      max_memory_restart: "1G",
+      node_args: [
+        "--max-old-space-size=1024", // limit heap Node ke 1GB
+        "--unhandled-rejections=strict",
+        "--trace-uncaught"
+      ],
+
+      // ---- ZERO-DOWNTIME / GRACEFUL ----
+      wait_ready: true,            // butuh process.send('ready')
+      listen_timeout: 20000,       // tunggu ready maksimal 20s
+      kill_timeout: 15000,         // grace kill 15s
+      shutdown_with_message: true, // kirim pesan shutdown ke app
+
+      // ---- WATCH (hanya aktif di dev) ----
+      watch: false,
+      ignore_watch: ["node_modules", "logs", ".git"]
     }
   ]
 };
