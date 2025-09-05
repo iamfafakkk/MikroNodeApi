@@ -38,7 +38,7 @@ module.exports = {
       max_memory_restart: "1G",
       node_args: [
         "--max-old-space-size=1024", // limit heap Node ke 1GB
-        "--unhandled-rejections=strict",
+        "--unhandled-rejections=warn", // jangan matikan proses saat promise tidak tertangani
         "--trace-uncaught"
       ],
 

@@ -102,7 +102,18 @@ class WebsocketController {
 
       // TODO: SOCKET EVENT ROUTES
       socket.on("event/v2", async (props) => {
-        await this.handleEventV2(socket, socketId, props);
+        try {
+          await this.handleEventV2(socket, socketId, props);
+        } catch (err) {
+          console.error(`event/v2 handler error for ${socketId}:`, err && err.message ? err.message : err);
+          try {
+            socket.emit("event/v2/error", {
+              message: err && err.message ? err.message : "Unknown error",
+              socket_id: socketId,
+              timestamp: new Date().toISOString(),
+            });
+          } catch (_) {}
+        }
       });
 
       socket.on("stopstream", () => {
@@ -204,8 +215,18 @@ class WebsocketController {
           this.conns.set(connectionKey, this.conn);
         }
       } catch (error) {
-        console.error("Kesalahan dalam proses koneksi:", error.message);
-        throw error;
+        console.error("Kesalahan dalam proses koneksi:", error && error.message ? error.message : error);
+        // Jangan lempar error agar tidak menjadi unhandledRejection
+        try {
+          if (socket && socket.emit) {
+            socket.emit("event/v2/error", {
+              message: error && error.message ? error.message : "Terjadi kesalahan koneksi",
+              socket_id: socketId,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        } catch (_) {}
+        return; // hentikan eksekusi
       }
     }
 
