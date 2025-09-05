@@ -19,8 +19,8 @@ module.exports = {
       },
 
       // ---- LOGGING ----
-      out_file: "/var/log/mikro-node-api/out.log",
-      error_file: "/var/log/mikro-node-api/err.log",
+      out_file: "/home/mikronode/logs/mikro-node-api/out.log",
+      error_file: "/home/mikronode/logs/mikro-node-api/err.log",
       merge_logs: true,
       time: true,
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
