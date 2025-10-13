@@ -117,7 +117,7 @@ class WebsocketController {
       });
 
       // EMIT AND LISTEN
-      io.on('connection', (socket) => {
+      this.io.on('connection', (socket) => {
         socket.on('listen/v1', (payload = {}) => {
           try {
             socket.broadcast.emit('response/v1', payload); // or io.emit(...) if everyone needs it
