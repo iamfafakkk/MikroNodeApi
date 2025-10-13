@@ -117,13 +117,16 @@ class WebsocketController {
       });
 
       // EMIT AND LISTEN
-      socket.on("listen/v1", async () => {
-        try {
-          socket.emit("response/v1");
-        } catch (err) {
-          console.error(`listen/v1 handler error for ${socketId}:`, err && err.message ? err.message : err);
-        }
+      io.on('connection', (socket) => {
+        socket.on('listen/v1', (payload = {}) => {
+          try {
+            socket.broadcast.emit('response/v1', payload); // or io.emit(...) if everyone needs it
+          } catch (err) {
+            console.error(`listen/v1 handler error for ${socket.id}:`, err?.message ?? err);
+          }
+        });
       });
+
 
       socket.on("stopstream", () => {
         if (this.streaming) {
