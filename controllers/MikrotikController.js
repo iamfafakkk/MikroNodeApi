@@ -1,4 +1,26 @@
 const { RouterOSAPI } = require("node-routeros");
+const { Channel } = require("node-routeros/dist/Channel");
+
+// Patch channel processing so '!empty' replies resolve like empty data instead of throwing
+if (!Channel.prototype._handlesEmptyReply) {
+  const originalProcessPacket = Channel.prototype.processPacket;
+  Channel.prototype.processPacket = function (packet) {
+    if (Array.isArray(packet) && packet[0] === "!empty") {
+      packet.shift(); // drop reply marker
+      const parsed = this.parsePacket(packet);
+      if (packet.length > 0 && !this.streaming) {
+        this.emit("data", parsed);
+      }
+      if (!this.trapped) {
+        this.emit("done", this.data);
+      }
+      return;
+    }
+
+    return originalProcessPacket.call(this, packet);
+  };
+  Channel.prototype._handlesEmptyReply = true;
+}
 
 class MikrotikController {
   constructor() {
