@@ -295,15 +295,70 @@ class WebsocketController {
         await this.handleMonitoringStatik(socket, socketId, server, params);
         break;
       case "/system/resource":
-        await this.handleSystemResource(socket, socketId, server, params);
+        await this.handleSystemResource(socket, socketId, server, params, props);
         break;
     }
   }
-  async handleSystemResource(socket, socketId, server, params = []) {
-    let resData = [];
+  async handleSystemResource(socket, socketId, server, params = [], props = {}) {
+    const page = props?.page || null;
+    const requestId = props?.requestId || props?.data?.requestId || null;
+
+    if (!socket || !socket.connected) {
+      console.warn(`Socket ${socketId} tidak terhubung, skip handleSystemResource`);
+      return;
+    }
+
+    if (!this.conn || !this.conn.connected) {
+      console.error(`Router connection belum siap untuk socket ${socketId}`);
+      socket.emit("/system/resource", {
+        error: "Router connection is not ready",
+        socket_id: socketId,
+        page,
+        request_id: requestId,
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const parseHostPort = (ipWithPort) => {
+      if (typeof ipWithPort !== "string") {
+        return { host: null, port: null };
+      }
+
+      const [hostPart, portPart] = ipWithPort.split(":");
+      const parsedPort = portPart && !Number.isNaN(Number(portPart))
+        ? Number(portPart)
+        : null;
+
+      return {
+        host: hostPart || null,
+        port: parsedPort,
+      };
+    };
+
+    const addressInfo = parseHostPort(server?.ip);
+    const serverHost = server?.host || addressInfo.host;
+    const serverPort = server?.port || addressInfo.port;
+
+    const socketData = {
+      isActive: true,
+      socketId,
+      serverName: server?.name || null,
+      page,
+      requestId,
+    };
+
     let hitung = 0;
     const newIntervalId = setInterval(async () => {
       try {
+        if (!socket.connected) {
+          socketData.isActive = false;
+          clearInterval(newIntervalId);
+          this.activeIntervals.delete(socketId);
+          console.log(`Interval untuk socket ${socketId} dihentikan - socket tidak terhubung`);
+          return;
+        }
+
         const resources = await this.conn.write(
           "/system/resource/print",
           params
@@ -350,6 +405,7 @@ class WebsocketController {
           if (!this.socketsId.has(socketId)) {
             clearInterval(newIntervalId);
             this.activeIntervals.delete(socketId);
+            socketData.isActive = false;
             console.log(
               `Interval untuk socket ${socketId} dihentikan karena sudah melebihi batas`
             );
@@ -357,18 +413,60 @@ class WebsocketController {
           }
         }
 
+        const resourcePayload = tempResData[0] || {};
+        const enrichedPayload = {
+          ...resourcePayload,
+          socket_id: socketId,
+          page,
+          request_id: requestId,
+          router: server?.name || null,
+          server_name: server?.name || null,
+          server_id: server?.id || null,
+          host: serverHost || null,
+          port: serverPort || null,
+          ip: server?.ip || null,
+          timestamp: new Date().toISOString(),
+          meta: {
+            socket_id: socketId,
+            page,
+            request_id: requestId,
+            server: {
+              id: server?.id || null,
+              name: server?.name || null,
+              host: serverHost || null,
+              port: serverPort || null,
+              ip: server?.ip || null,
+            },
+          },
+        };
+
         console.log(
-          `${hitung} ${server?.name
-          } ${"/system/resource"} dikirim ke ${socketId}`
+          `${hitung} ${server?.name || "unknown"
+          } ${"/system/resource"} dikirim ke ${socketId}${page ? ` (page: ${page})` : ""}`
         );
-        socket.emit("/system/resource", tempResData[0] || {});
+        socket.emit("/system/resource", enrichedPayload);
       } catch (error) {
         console.error("Error saat mendapatkan data:", error.message);
         // Emit error to client
-        socket.emit("/system/resource", { error: error.message });
+        socket.emit("/system/resource", {
+          error: error.message,
+          socket_id: socketId,
+          page,
+          request_id: requestId,
+          router: server?.name || null,
+          server_name: server?.name || null,
+          server_id: server?.id || null,
+          host: serverHost || null,
+          port: serverPort || null,
+          ip: server?.ip || null,
+          timestamp: new Date().toISOString(),
+        });
       }
     }, 1000);
-    this.activeIntervals.set(socketId, newIntervalId);
+    this.activeIntervals.set(socketId, {
+      intervalId: newIntervalId,
+      socketData,
+    });
   }
 
   async handleInterfaceEthernet(socket, socketId, server, params) {
