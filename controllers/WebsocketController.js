@@ -1276,6 +1276,7 @@ class WebsocketController {
                 uptime,
                 traffic,
                 ping: ping[0] || {},
+                socket_id: socket.id,
               };
             });
           trafficPromises.push(trafficPromise);
@@ -1288,6 +1289,7 @@ class WebsocketController {
             uptime,
             traffic,
             ping: ping[0] || {},
+            socket_id: socket.id,
           };
         }
 
@@ -1306,6 +1308,7 @@ class WebsocketController {
 
         // Double-check socket is still connected before emitting
         if (socket.connected) {
+          // console.log(tempResData)
           socket.emit("/monitoring/active", tempResData);
         } else {
           // Socket disconnected, clean up

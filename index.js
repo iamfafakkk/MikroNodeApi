@@ -68,7 +68,7 @@ const gracefulShutdown = (label) => {
       process.exit(0);
     });
     // Failsafe: force exit after timeout
-    setTimeout(() => process.exit(0), 10000).unref();
+    setTimeout(() => process.exit(0), 3000).unref();
   } catch (e) {
     console.error("Error during graceful shutdown:", e);
     process.exit(0);
