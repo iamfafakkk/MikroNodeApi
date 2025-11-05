@@ -30,6 +30,90 @@ class WebsocketController {
     this.initializeSocketEvents();
   }
 
+  parseServerCredentials(server = {}) {
+    if (!server.ip || !server.user || !server.pass) {
+      return null;
+    }
+
+    const [rawHost, rawPort] = String(server.ip).split(":");
+    const port = Number(rawPort);
+
+    if (!rawHost || Number.isNaN(port)) {
+      return null;
+    }
+
+    return {
+      credentials: {
+        ip: rawHost,
+        port,
+        user: server.user,
+        pass: server.pass,
+      },
+      connectionKey: JSON.stringify({
+        ip: rawHost,
+        port,
+        user: server.user,
+        pass: server.pass,
+      }),
+    };
+  }
+
+  async ensureRouterConnection(server = {}) {
+    const parsed = this.parseServerCredentials(server);
+
+    if (!parsed) {
+      throw new Error("Server credential tidak lengkap atau format IP salah");
+    }
+
+    const { credentials, connectionKey } = parsed;
+
+    if (this.conns.has(connectionKey)) {
+      const existingConn = this.conns.get(connectionKey);
+
+      if (!existingConn.connected) {
+        await existingConn.connect();
+      }
+
+      return { conn: existingConn, connectionKey, credentials };
+    }
+
+    const newConn = new RouterOSAPI({
+      host: credentials.ip,
+      port: credentials.port,
+      user: credentials.user,
+      password: credentials.pass,
+      keepalive: true,
+    });
+
+    const handleConnError = (err) => {
+      console.error(`Kesalahan koneksi [${credentials.ip}]:`, err.message);
+
+      try {
+        newConn.close();
+      } catch (_) {
+        // Ignore close errors
+      }
+
+      if (this.conns.get(connectionKey) === newConn) {
+        this.conns.delete(connectionKey);
+      }
+    };
+
+    newConn
+      .on("error", handleConnError)
+      .on("close", () => {
+        console.log(`Koneksi ke ${credentials.ip} ditutup`);
+      })
+      .on("connected", () => {
+        console.log(`Terhubung ke ${credentials.ip}`);
+      });
+
+    await newConn.connect();
+    this.conns.set(connectionKey, newConn);
+
+    return { conn: newConn, connectionKey, credentials };
+  }
+
   initializeSocketEvents() {
     this.io.on("connection", (socket) => {
       const socketId = socket.id;
@@ -162,82 +246,22 @@ class WebsocketController {
 
     if (server.ip && server.user && server.pass) {
       try {
-        // Validasi format IP:Port
-        const ipPort = server.ip.split(":");
-        if (ipPort.length !== 2 || isNaN(ipPort[1])) {
-          throw new Error("Format IP tidak valid. Harus dalam format IP:PORT");
-        }
-
-        // Membuat kunci unik berbasis objek
-        const connectionKey = JSON.stringify({
-          ip: ipPort[0],
-          port: parseInt(ipPort[1], 10),
-          user: server.user,
-          pass: server.pass,
-        });
-
-        const currentCred = {
-          ip: ipPort[0],
-          port: parseInt(ipPort[1], 10),
-          user: server.user,
-          pass: server.pass,
-        };
-
-        if (this.conns.has(connectionKey)) {
-          console.log(`Menggunakan koneksi yang sudah ada untuk ${server.ip}`);
-          this.conn = this.conns.get(connectionKey);
-
-          // Cek status koneksi sebelum reconnect
-          if (!this.conn.connected) {
-            await this.conn.connect();
-            console.log("Berhasil menyambungkan kembali ke Mikrotik");
-          }
-        } else {
-          console.log(`Membuat koneksi baru ke ${server.ip}`);
-
-          this.conn = new RouterOSAPI({
-            host: currentCred.ip,
-            port: currentCred.port,
-            user: currentCred.user,
-            password: currentCred.pass,
-            keepalive: true,
-          });
-
-          // Handler error terpusat
-          const errorHandler = (err) => {
-            console.error(
-              `Kesalahan koneksi [${currentCred.ip}]:`,
-              err.message
-            );
-            this.conn.close();
-          };
-
-          // Event listeners
-          this.conn
-            .on("error", errorHandler)
-            .on("close", () => {
-              console.log(`Koneksi ke ${currentCred.ip} ditutup`);
-            })
-            .on("connected", () => {
-              console.log(`Terhubung ke ${currentCred.ip}`);
-            });
-
-          // Melakukan koneksi dengan timeout
-          await this.conn.connect();
-          this.conns.set(connectionKey, this.conn);
-        }
+        const { conn } = await this.ensureRouterConnection(server);
+        this.conn = conn;
       } catch (error) {
-        console.error("Kesalahan dalam proses koneksi:", error && error.message ? error.message : error);
-        // Jangan lempar error agar tidak menjadi unhandledRejection
+        const errorMessage = error && error.message ? error.message : "Terjadi kesalahan koneksi";
+        console.error("Kesalahan dalam proses koneksi:", errorMessage);
+
         try {
           if (socket && socket.emit) {
             socket.emit("event/v2/error", {
-              message: error && error.message ? error.message : "Terjadi kesalahan koneksi",
+              message: errorMessage,
               socket_id: socketId,
               timestamp: new Date().toISOString(),
             });
           }
         } catch (_) { }
+
         return; // hentikan eksekusi
       }
     }
@@ -1208,6 +1232,33 @@ class WebsocketController {
   async handleMonitoringActive(socket, socketId, server, params) {
     console.log(`Socket connected: ${socketId}`);
 
+    if (!server || !server.ip || !server.user || !server.pass) {
+      console.warn(`Server credential tidak lengkap untuk socket ${socketId}`);
+      return;
+    }
+
+    let routerConn;
+
+    try {
+      const { conn } = await this.ensureRouterConnection(server);
+      routerConn = conn;
+      this.conn = conn; // maintain legacy behaviour for downstream handlers
+    } catch (error) {
+      const errorMessage = error && error.message ? error.message : "Tidak dapat menyiapkan koneksi router";
+      console.error(`handleMonitoringActive connection error (${socketId}):`, errorMessage);
+
+      if (socket && socket.emit) {
+        socket.emit("/monitoring/active", {
+          error: errorMessage,
+          socket_id: socketId,
+          router: server?.name || server?.ip,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      return;
+    }
+
     // Check if interval already exists for this socket
     if (this.activeIntervals.has(socketId)) {
       console.log(`Interval untuk socket ${socketId} sudah berjalan`);
@@ -1224,14 +1275,25 @@ class WebsocketController {
     const socketData = {
       resData: [],
       hitung: 0,
-      isActive: true
+      isActive: true,
+      routerConn: routerConn,
     };
 
     const newIntervalId = setInterval(async () => {
       try {
+        const connection = socketData.routerConn;
+
+        if (!connection) {
+          throw new Error("Koneksi router tidak tersedia untuk socket ini");
+        }
+
+        if (!connection.connected) {
+          await connection.connect();
+        }
+
         const tempResData = [];
         const trafficPromises = [];
-        const active = await this.conn.write("/ppp/active/print", params);
+        const active = await connection.write("/ppp/active/print", params);
 
         let status = active[0]?.name ? "online" : "offline";
         let address = active[0]?.address || "N/A";
@@ -1247,7 +1309,7 @@ class WebsocketController {
 
         if (status === "online" && pppoeName) {
           try {
-            ping = await this.conn.write("/ping", [
+            ping = await connection.write("/ping", [
               `=address=${active[0]?.address}`,
               "=count=1",
             ]);
@@ -1255,7 +1317,7 @@ class WebsocketController {
             // Error handling for ping
           }
 
-          const trafficPromise = this.conn
+          const trafficPromise = connection
             .write("/interface/monitor-traffic", [
               `=interface=${pppoeName}`,
               `=once=`,
@@ -1268,7 +1330,7 @@ class WebsocketController {
                   (result?.[0]?.["tx-bits-per-second"] || 0),
               };
               tempResData[0] = {
-                name: active.name,
+                name: active?.[0]?.name,
                 username: active[0].name || "N/A",
                 status,
                 router: server.name,
@@ -1282,7 +1344,7 @@ class WebsocketController {
           trafficPromises.push(trafficPromise);
         } else {
           tempResData[0] = {
-            name: active.name,
+            name: active?.[0]?.name,
             status,
             router: server.name,
             address,
