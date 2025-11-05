@@ -1276,7 +1276,7 @@ class WebsocketController {
                 uptime,
                 traffic,
                 ping: ping[0] || {},
-                socket_id: socket.id,
+                socket_id: socketId,
               };
             });
           trafficPromises.push(trafficPromise);
@@ -1289,7 +1289,7 @@ class WebsocketController {
             uptime,
             traffic,
             ping: ping[0] || {},
-            socket_id: socket.id,
+            socket_id: socketId,
           };
         }
 
