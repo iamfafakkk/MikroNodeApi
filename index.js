@@ -59,6 +59,9 @@ const io = socketIO(server, config.socket);
 // Initialize WebSocket Controller
 const websocketController = new WebsocketController(server, io, app);
 
+// Make websocketController available to routes through app locals
+app.set('websocketController', websocketController);
+
 // Graceful shutdown handlers (PM2 + signals)
 const gracefulShutdown = (label) => {
   console.log(`[shutdown] received: ${label}`);

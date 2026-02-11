@@ -10,6 +10,7 @@ const config = {
       methods: ["GET", "POST"],
     },
   },
+  api_key: 'eb3b9c2c-7426-4fed-9d76-1c12abcb2b1c'
 };
 
 module.exports = config;
