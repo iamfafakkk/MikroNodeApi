@@ -33,7 +33,7 @@ class EventController {
       }
       
       // Broadcast event to all connected clients
-      websocketController.io.emit(eventName, eventData);
+      websocketController.io.emit('/trigger/event/', eventData);
       
       res.status(200).json({
         statusCode: 200,
