@@ -102,6 +102,7 @@ class MikrotikController {
         user: req.body.cred.username,
         password: req.body.cred.password,
         keepalive: true,
+        timeout: 30
       });
 
       // Set up event handlers

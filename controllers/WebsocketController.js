@@ -83,6 +83,7 @@ class WebsocketController {
       user: credentials.user,
       password: credentials.pass,
       keepalive: true,
+      timeout: 30,
     });
 
     const handleConnError = (err) => {
@@ -776,6 +777,7 @@ class WebsocketController {
           user: currentCred.user,
           password: currentCred.pass,
           keepalive: true,
+          timeout: 30,
         });
 
         // Event listeners for socket-specific connection
@@ -1629,6 +1631,7 @@ class WebsocketController {
                 user: currentCred.user,
                 password: currentCred.pass,
                 keepalive: true,
+                timeout: 30,
               });
 
               // Event listeners
